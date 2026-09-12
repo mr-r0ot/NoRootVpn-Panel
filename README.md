@@ -41,6 +41,40 @@ As far as we could find, no other publicly known project combines all of this in
 - Optional TLS toggle for testing on a plain-HTTP endpoint before going live
 - Tuned for **stability on CPU/process-constrained hosts**: bounded memory per session, backpressure instead of unbounded buffering, fault isolation (one bad connection can't take down every other user), and a short-hold relay design so dozens of a page's resources can share a tiny worker budget instead of exhausting it
 
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center"><img src="imges/DashBoard.png" width="360"></td>
+    <td align="center"><img src="imges/getconfigs.png" width="360"></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="imges/settings1.png" width="360"></td>
+    <td align="center"><img src="imges/settings2.png" width="360"></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="imges/settings3.png" width="360"></td>
+    <td align="center"><img src="imges/users.png" width="360"></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="imges/use.png" width="360"></td>
+    <td></td>
+  </tr>
+</table>
+
+### Image Links
+
+* [DashBoard](imges/DashBoard.png)
+* [Get Configs](imges/getconfigs.png)
+* [Settings 1](imges/settings1.png)
+* [Settings 2](imges/settings2.png)
+* [Settings 3](imges/settings3.png)
+* [Users](imges/users.png)
+* [Usage](imges/use.png)
+
+
+
 ## Requirements
 
 - PHP 7.4+ with `curl` and `zip` extensions (both nearly universal on shared hosting)
