@@ -46,33 +46,32 @@ As far as we could find, no other publicly known project combines all of this in
 
 <table>
   <tr>
-    <td align="center"><img src="imges/DashBoard.png" width="360"></td>
-    <td align="center"><img src="imges/getconfigs.png" width="360"></td>
+    <td align="center"><img src="images/DashBoard.png" width="360"></td>
+    <td align="center"><img src="images/getconfigs.png" width="360"></td>
   </tr>
   <tr>
-    <td align="center"><img src="imges/settings1.png" width="360"></td>
-    <td align="center"><img src="imges/settings2.png" width="360"></td>
+    <td align="center"><img src="images/settings1.png" width="360"></td>
+    <td align="center"><img src="images/settings2.png" width="360"></td>
   </tr>
   <tr>
-    <td align="center"><img src="imges/settings3.png" width="360"></td>
-    <td align="center"><img src="imges/users.png" width="360"></td>
+    <td align="center"><img src="images/settings3.png" width="360"></td>
+    <td align="center"><img src="images/users.png" width="360"></td>
   </tr>
   <tr>
-    <td align="center"><img src="imges/use.png" width="360"></td>
+    <td align="center"><img src="images/use.png" width="360"></td>
     <td></td>
   </tr>
 </table>
 
 ### Image Links
 
-* [DashBoard](imges/DashBoard.png)
-* [Get Configs](imges/getconfigs.png)
-* [Settings 1](imges/settings1.png)
-* [Settings 2](imges/settings2.png)
-* [Settings 3](imges/settings3.png)
-* [Users](imges/users.png)
-* [Usage](imges/use.png)
-
+* [DashBoard](images/DashBoard.png)
+* [Get Configs](images/getconfigs.png)
+* [Settings 1](images/settings1.png)
+* [Settings 2](images/settings2.png)
+* [Settings 3](images/settings3.png)
+* [Users](images/users.png)
+* [Usage](images/use.png)
 
 
 ## Requirements
