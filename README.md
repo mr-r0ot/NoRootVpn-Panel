@@ -6,6 +6,8 @@ A self-installing VLESS/XHTTP VPN panel that runs **entirely in PHP**, with no S
 
 ---
 
+---
+
 ## Why this exists
 
 Shared hosting is normally considered impossible territory for running a real VPN: no root, no arbitrary listening ports, a strict cap on concurrent processes, and often no SSH access at all. Every "VPN on shared hosting" approach we could find either needs a VPS, needs root, or is a thin wrapper that still assumes SSH.
@@ -17,6 +19,7 @@ This project instead:
 - Self-heals: a background watchdog inside the daemon itself restarts Xray within seconds if it crashes, independent of any web request
 - Falls back to a cron-based recovery path for hosts where a web-request-spawned process gets killed the instant the request ends
 - Never needs `exec()`/`proc_open()` to be *usable* — only to be *self-managing*; without them, it still generates working configs and tells the admin the exact command to run by hand
+### But Running a full and real(X-Ray) vpn without root access on normal php shared host was almost impossible
 
 As far as we could find, no other publicly known project combines all of this into a single-click, root-less, SSH-less panel. If you know of one, we'd genuinely like to hear about it.
 
