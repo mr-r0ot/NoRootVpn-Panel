@@ -5,6 +5,15 @@ A self-installing VLESS/XHTTP VPN panel that runs **entirely in PHP**, with no S
 [فارسی ↓](#پنل-vpn-بدون-روت)
 
 ---
+> **Disclaimer / سلب مسئولیت / 免责声明 / Отказ от ответственности**
+>
+> 🇬🇧 **English:** This project is for research and educational purposes only. Use it only where permitted by the hosting provider and applicable laws. The developer is not responsible for misuse, policy violations, or legal consequences. [Read the full disclaimer](DISCLAIMER.md)
+>
+> 🇮🇷 **فارسی:** این پروژه صرفاً با اهداف پژوهشی و آموزشی ارائه شده است. استفاده از آن فقط در محیط‌های مجاز و مطابق قوانین و شرایط سرویس‌دهنده مجاز است. مسئولیت هرگونه استفاده نادرست، نقض قوانین یا عواقب حقوقی بر عهده کاربر است. [متن کامل سلب مسئولیت](DISCLAIMER.md)
+>
+> 🇨🇳 **中文：** 本项目仅用于研究和教育目的。请仅在主机服务商许可及符合适用法律的情况下使用。开发者不对滥用、违反服务条款或由此产生的法律后果负责。 [完整免责声明](DISCLAIMER.md)
+>
+> 🇷🇺 **Русский:** Проект предназначен исключительно для исследовательских и образовательных целей. Используйте его только там, где это разрешено хостинг-провайдером и действующим законодательством. Разработчик не несёт ответственности за неправомерное использование, нарушение правил или юридические последствия. [Полный отказ от ответственности](DISCLAIMER.md)
 
 ---
 
