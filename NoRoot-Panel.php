@@ -13,6 +13,20 @@ if (!defined('NRV_INCLUDED_AS_LIB')) {
     session_start();
     error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
     ini_set('display_errors', 0);
+    if (empty($_SESSION['nrv_csrf'])) {
+        $_SESSION['nrv_csrf'] = bin2hex(random_bytes(32));
+    }
+}
+
+// CSRF protection for the login form and every authenticated admin action —
+// purely additive: doesn't touch tunnel/relay logic, session auth already
+// gated every action, this just also requires a per-session token so a
+// cross-site request can't ride the admin's authenticated cookie.
+function nrv_csrf_field() {
+    return '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($_SESSION['nrv_csrf'] ?? '') . '">';
+}
+function nrv_csrf_valid() {
+    return isset($_SESSION['nrv_csrf'], $_POST['csrf_token']) && hash_equals($_SESSION['nrv_csrf'], $_POST['csrf_token']);
 }
 
 // ============================================================
@@ -48,7 +62,19 @@ function nrv_save_config($data) {
 function nrv_write_protective_htaccess() {
     $path = NRV_DIR . '/.htaccess';
     $marker = '# NoRootVPN-protect';
-    $rule = "\n$marker\n<IfModule mod_authz_core.c>\n  <Files \"NoRoot-Config.json\">\n    Require all denied\n  </Files>\n</IfModule>\n<IfModule !mod_authz_core.c>\n  <Files \"NoRoot-Config.json\">\n    Order allow,deny\n    Deny from all\n  </Files>\n</IfModule>\n\n# Disable compression/buffering for the traffic proxy — required for xhttp streaming to work\n<IfModule mod_deflate.c>\n  SetEnvIfNoCase Request_URI proxy\\.php$ no-gzip dont-vary\n</IfModule>\n<IfModule mod_brotli.c>\n  SetEnvIfNoCase Request_URI proxy\\.php$ no-brotli dont-vary\n</IfModule>\n<Files \"proxy.php\">\n  SetEnv no-gzip 1\n  SetEnv no-brotli 1\n</Files>\n\n# Route /proxy.php/<anything> to proxy.php instead of 404ing on the extra path segments\nAcceptPathInfo On\n<IfModule mod_rewrite.c>\n  RewriteEngine On\n  RewriteCond %{REQUEST_FILENAME} !-f\n  RewriteRule ^proxy\\.php(/.*)?$ proxy.php [L]\n</IfModule>\n";
+    $rule = "\n$marker\n"
+        . "# No directory listing\nOptions -Indexes\n\n"
+        . "<IfModule mod_authz_core.c>\n  <Files \"NoRoot-Config.json\">\n    Require all denied\n  </Files>\n</IfModule>\n<IfModule !mod_authz_core.c>\n  <Files \"NoRoot-Config.json\">\n    Order allow,deny\n    Deny from all\n  </Files>\n</IfModule>\n\n"
+        // Broader safety net beyond the specific file above: any config/log
+        // file that ever lands at the panel root (not just bin/, which
+        // already has its own deny-all .htaccess) stays unreachable over
+        // HTTP, and daemon.php is a CLI-only process broker that was never
+        // meant to be requested directly — none of this touches proxy.php or
+        // cron.php, both of which must stay web-reachable for the tunnel and
+        // for cron-less hosts to work.
+        . "<IfModule mod_authz_core.c>\n  <FilesMatch \"\\.(json|log)$\">\n    Require all denied\n  </FilesMatch>\n  <Files \"daemon.php\">\n    Require all denied\n  </Files>\n</IfModule>\n<IfModule !mod_authz_core.c>\n  <FilesMatch \"\\.(json|log)$\">\n    Order allow,deny\n    Deny from all\n  </FilesMatch>\n  <Files \"daemon.php\">\n    Order allow,deny\n    Deny from all\n  </Files>\n</IfModule>\n\n"
+        . "# Disable compression/buffering for the traffic proxy — required for xhttp streaming to work\n<IfModule mod_deflate.c>\n  SetEnvIfNoCase Request_URI proxy\\.php$ no-gzip dont-vary\n</IfModule>\n<IfModule mod_brotli.c>\n  SetEnvIfNoCase Request_URI proxy\\.php$ no-brotli dont-vary\n</IfModule>\n<Files \"proxy.php\">\n  SetEnv no-gzip 1\n  SetEnv no-brotli 1\n</Files>\n\n"
+        . "# Route /proxy.php/<anything> to proxy.php instead of 404ing on the extra path segments\nAcceptPathInfo On\n<IfModule mod_rewrite.c>\n  RewriteEngine On\n  RewriteCond %{REQUEST_FILENAME} !-f\n  RewriteRule ^proxy\\.php(/.*)?$ proxy.php [L]\n</IfModule>\n";
     $existing = file_exists($path) ? file_get_contents($path) : '';
     if (strpos($existing, $marker) === false) {
         file_put_contents($path, $existing . $rule);
@@ -679,6 +705,36 @@ define('NRV_XRAY_ZIP_MAX_BYTES', 80 * 1024 * 1024);
 define('NRV_XRAY_ZIP_ENTRY_MAX_BYTES', 200 * 1024 * 1024);
 define('NRV_XRAY_ZIP_MAX_ENTRIES', 20);
 
+// Best-effort integrity check: GitHub's Releases API reports a sha256 digest
+// for each uploaded asset (independent of the CDN download path itself).
+// Returns the hex digest string, or null if it couldn't be determined for
+// any reason (API unreachable, field absent, etc.) — callers must treat null
+// as "skip this check", not as a failure, so a GitHub API hiccup can never
+// block an otherwise-working install.
+function nrv_fetch_github_asset_digest($assetName) {
+    if (!function_exists('curl_init')) return null;
+    $ch = curl_init('https://api.github.com/repos/XTLS/Xray-core/releases/latest');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 15,
+        CURLOPT_HTTPHEADER => ['User-Agent: NoRootVpn-Panel', 'Accept: application/vnd.github+json'],
+    ]);
+    $body = curl_exec($ch);
+    $ok = curl_getinfo($ch, CURLINFO_HTTP_CODE) == 200;
+    curl_close($ch);
+    if (!$ok || !$body) return null;
+    $data = json_decode($body, true);
+    if (!is_array($data) || empty($data['assets'])) return null;
+    foreach ($data['assets'] as $asset) {
+        if (($asset['name'] ?? '') === $assetName && !empty($asset['digest'])) {
+            // Format is "sha256:<hex>"
+            $parts = explode(':', $asset['digest'], 2);
+            if (count($parts) === 2 && $parts[0] === 'sha256') return strtolower($parts[1]);
+        }
+    }
+    return null;
+}
+
 function nrv_download_xray($destDir) {
     // A slow connection to GitHub can legitimately take well over PHP's
     // default max_execution_time (often 30-60s on shared hosting), which
@@ -691,6 +747,7 @@ function nrv_download_xray($destDir) {
     } else {
         $url = $arch === 'arm64' ? NRV_XRAY_RELEASE_URL_ARM64 : NRV_XRAY_RELEASE_URL_AMD64;
     }
+    $assetName = basename(parse_url($url, PHP_URL_PATH));
     $zipPath = rtrim($destDir, '/') . '/xray.zip';
 
     $downloaded = false;
@@ -718,6 +775,21 @@ function nrv_download_xray($destDir) {
     if (!$downloaded) {
         @unlink($zipPath);
         return ['ok' => false, 'error' => 'Download failed. Please upload the Xray binary manually to: ' . $destDir . '/' . (NRV_IS_WINDOWS ? 'xray.exe' : 'xray')];
+    }
+
+    // Integrity/authenticity check: verify the downloaded archive's sha256
+    // against the digest GitHub itself reports for this exact release asset.
+    // Best-effort by design — if the digest can't be obtained (API hiccup),
+    // we proceed rather than block an otherwise-working install; but if we
+    // DO get a digest and it doesn't match, that's a real corruption/tamper
+    // signal and the file must not be trusted.
+    $expectedDigest = nrv_fetch_github_asset_digest($assetName);
+    if ($expectedDigest !== null) {
+        $actualDigest = @hash_file('sha256', $zipPath);
+        if (!$actualDigest || !hash_equals($expectedDigest, $actualDigest)) {
+            @unlink($zipPath);
+            return ['ok' => false, 'error' => 'Downloaded file failed checksum verification (expected sha256 ' . $expectedDigest . '). The download may be corrupted or tampered with — try again.'];
+        }
     }
 
     if (!class_exists('ZipArchive')) return ['ok' => false, 'error' => 'ZipArchive PHP extension is not available. Please upload and extract the xray binary manually to: ' . $destDir . '/' . (NRV_IS_WINDOWS ? 'xray.exe' : 'xray')];
@@ -749,6 +821,15 @@ function nrv_download_xray($destDir) {
     $binPath = rtrim($destDir, '/') . '/' . (NRV_IS_WINDOWS ? 'xray.exe' : 'xray');
     if (!file_exists($binPath)) return ['ok' => false, 'error' => 'xray binary not found after extraction'];
     if (filesize($binPath) < 1_000_000) return ['ok' => false, 'error' => 'extracted xray binary is implausibly small; download likely corrupt'];
+    // Network-independent sanity check regardless of the checksum step above:
+    // confirm the extracted file is actually the executable format expected
+    // for this OS (ELF on Linux, PE on Windows) before we ever try to run it.
+    $magic = @file_get_contents($binPath, false, null, 0, 4);
+    $validMagic = NRV_IS_WINDOWS ? (substr($magic, 0, 2) === 'MZ') : (substr($magic, 0, 4) === "\x7FELF");
+    if (!$validMagic) {
+        @unlink($binPath);
+        return ['ok' => false, 'error' => 'Extracted file is not a valid ' . (NRV_IS_WINDOWS ? 'Windows executable (PE)' : 'Linux executable (ELF)') . ' — refusing to run it. The archive contents may not match this server.'];
+    }
     if (!NRV_IS_WINDOWS) @chmod($binPath, 0755);
     return ['ok' => true];
 }
@@ -929,7 +1010,20 @@ if (!$installed) {
         $adminUser = trim($_POST['admin_username'] ?: 'admin');
         $adminPass = $_POST['admin_password'] ?? '';
 
-        if (strlen($adminPass) < 6) {
+        // Defense-in-depth input validation — every value below already flows
+        // through escapeshellarg() wherever it reaches exec()/proc_open(), so
+        // this isn't closing a shell-injection hole; it rejects path
+        // traversal in base_dir (which is used directly in filesystem
+        // operations, not just shelled-out commands) and strips characters
+        // that have no legitimate reason to appear in a hostname/URL path,
+        // as a second layer beyond the existing escaping.
+        if (strpos($baseDir, "\0") !== false || preg_match('#(^|[\\\\/])\.\.([\\\\/]|$)#', $baseDir)) {
+            $installError = 'Base directory must not contain ".." path segments.';
+        } elseif (preg_match('/[\x00-\x1F\x7F]/', $splitPath) || preg_match('/[\x00-\x1F\x7F]/', $publicHost)) {
+            $installError = 'SplitHTTP path / public host must not contain control characters.';
+        } elseif ($localPort < 1 || $localPort > 65535 || $publicPort < 1 || $publicPort > 65535) {
+            $installError = 'Ports must be between 1 and 65535.';
+        } elseif (strlen($adminPass) < 6) {
             $installError = 'Admin password must be at least 6 characters.';
         } else {
             if (!is_dir($baseDir)) @mkdir($baseDir, 0755, true);
@@ -1090,7 +1184,14 @@ if (empty($_SESSION['nrv_logged_in'])) {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $u = $_POST['username'] ?? '';
         $p = $_POST['password'] ?? '';
-        if ($u === $cfg['admin_username'] && password_verify($p, $cfg['admin_password_hash'])) {
+        $captchaOk = isset($_SESSION['nrv_captcha_answer'], $_POST['captcha'])
+            && (int)$_POST['captcha'] === (int)$_SESSION['nrv_captcha_answer'];
+        if (!nrv_csrf_valid()) {
+            $loginError = 'Your session expired — please try again.';
+        } elseif (!$captchaOk) {
+            $loginError = 'Incorrect answer to the verification question.';
+        } elseif ($u === $cfg['admin_username'] && password_verify($p, $cfg['admin_password_hash'])) {
+            unset($_SESSION['nrv_captcha_answer']);
             $_SESSION['nrv_logged_in'] = true;
             $_SESSION['nrv_last_healthcheck'] = nrv_run_login_healthcheck($cfg);
             header('Location: ' . basename(__FILE__));
@@ -1099,6 +1200,13 @@ if (empty($_SESSION['nrv_logged_in'])) {
             $loginError = 'Invalid username or password.';
         }
     }
+    // A fresh question every render (including after a failed attempt) so a
+    // captured/replayed answer can't be reused — a lightweight, self-hosted
+    // bot deterrent with no external service dependency (works even on
+    // heavily-censored networks where a third-party CAPTCHA might not load).
+    $captchaA = random_int(1, 9);
+    $captchaB = random_int(1, 9);
+    $_SESSION['nrv_captcha_answer'] = $captchaA + $captchaB;
     ?>
     <!DOCTYPE html>
     <html lang="en">
@@ -1115,10 +1223,13 @@ if (empty($_SESSION['nrv_logged_in'])) {
         <div class="subtitle">Sign in</div>
         <?php if ($loginError): ?><div class="alert bad"><?= htmlspecialchars($loginError) ?></div><?php endif; ?>
         <form method="post">
+          <?= nrv_csrf_field() ?>
           <label>Username</label>
-          <input type="text" name="username" required>
+          <input type="text" name="username" required autocomplete="username">
           <label>Password</label>
-          <input type="password" name="password" required>
+          <input type="password" name="password" required autocomplete="current-password">
+          <label><?= $captchaA ?> + <?= $captchaB ?> = ?</label>
+          <input type="text" name="captcha" inputmode="numeric" autocomplete="off" required>
           <button class="btn" type="submit">Sign in</button>
         </form>
       </div>
@@ -1139,6 +1250,12 @@ nrv_ensure_services_running($cfg);
 // ============================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['nrv_action'])) {
     $action = $_POST['nrv_action'];
+
+    if (!nrv_csrf_valid()) {
+        $_SESSION['nrv_flash_error'] = 'Your session expired — please try the action again.';
+        header('Location: ?page=' . ($_GET['page'] ?? 'dashboard'));
+        exit;
+    }
 
     if ($action === 'create_user') {
         $name = trim($_POST['name'] ?: ('user_' . substr(md5(uniqid()), 0, 5)));
@@ -1363,7 +1480,7 @@ $daemonPid = nrv_daemon_pid($cfg);
       <div class="panel-box">
         <h2>Add new user</h2>
         <form method="post">
-          <input type="hidden" name="nrv_action" value="create_user">
+          <input type="hidden" name="nrv_action" value="create_user"><?= nrv_csrf_field() ?>
           <label>Name</label>
           <input type="text" name="name" placeholder="e.g. john" required>
           <button class="btn" type="submit">Create</button>
@@ -1389,12 +1506,12 @@ $daemonPid = nrv_daemon_pid($cfg);
                 <button class="btn small" onclick="nrvShowConfig('<?= htmlspecialchars(addslashes($u['id'])) ?>', '<?= htmlspecialchars(addslashes($u['name'])) ?>')">Configs</button>
                 <button class="btn small ghost" onclick="nrvShowEdit('<?= htmlspecialchars(addslashes($u['id'])) ?>', '<?= htmlspecialchars(addslashes($u['name'])) ?>')">Edit</button>
                 <form method="post" style="display:inline">
-                  <input type="hidden" name="nrv_action" value="toggle_user">
+                  <input type="hidden" name="nrv_action" value="toggle_user"><?= nrv_csrf_field() ?>
                   <input type="hidden" name="id" value="<?= htmlspecialchars($u['id']) ?>">
                   <button class="btn small ghost" type="submit"><?= $enabled ? 'Disable' : 'Enable' ?></button>
                 </form>
                 <form method="post" style="display:inline">
-                  <input type="hidden" name="nrv_action" value="delete_user">
+                  <input type="hidden" name="nrv_action" value="delete_user"><?= nrv_csrf_field() ?>
                   <input type="hidden" name="id" value="<?= htmlspecialchars($u['id']) ?>">
                   <button class="btn small danger" type="submit" onclick="return confirm('Delete this user?')">Delete</button>
                 </form>
@@ -1411,7 +1528,7 @@ $daemonPid = nrv_daemon_pid($cfg);
         <div class="modal-box">
           <h2>Edit User</h2>
           <form method="post" id="nrv-edit-form">
-            <input type="hidden" name="nrv_action" value="edit_user">
+            <input type="hidden" name="nrv_action" value="edit_user"><?= nrv_csrf_field() ?>
             <input type="hidden" name="id" id="nrv-edit-id">
             <label>Name</label>
             <input type="text" name="name" id="nrv-edit-name" required>
@@ -1423,7 +1540,7 @@ $daemonPid = nrv_daemon_pid($cfg);
             installed it on — only do this if their credential may have leaked.
           </p>
           <form method="post" onsubmit="return confirm('This invalidates the user\'s current config everywhere. Continue?')">
-            <input type="hidden" name="nrv_action" value="regenerate_uuid">
+            <input type="hidden" name="nrv_action" value="regenerate_uuid"><?= nrv_csrf_field() ?>
             <input type="hidden" name="id" id="nrv-edit-id-2">
             <button class="btn danger" type="submit">Regenerate UUID</button>
           </form>
@@ -1500,19 +1617,19 @@ $daemonPid = nrv_daemon_pid($cfg);
           </div>
         <?php endif; ?>
         <form method="post" style="display:inline">
-          <input type="hidden" name="nrv_action" value="xray_start">
+          <input type="hidden" name="nrv_action" value="xray_start"><?= nrv_csrf_field() ?>
           <button class="btn small" type="submit" <?= $procCtlAvailable ? '' : 'disabled' ?>>Start</button>
         </form>
         <form method="post" style="display:inline">
-          <input type="hidden" name="nrv_action" value="xray_stop">
+          <input type="hidden" name="nrv_action" value="xray_stop"><?= nrv_csrf_field() ?>
           <button class="btn small danger" type="submit" <?= $procCtlAvailable ? '' : 'disabled' ?>>Stop</button>
         </form>
         <form method="post" style="display:inline">
-          <input type="hidden" name="nrv_action" value="xray_restart">
+          <input type="hidden" name="nrv_action" value="xray_restart"><?= nrv_csrf_field() ?>
           <button class="btn small" type="submit" <?= $procCtlAvailable ? '' : 'disabled' ?>>Restart</button>
         </form>
         <form method="post" style="display:inline">
-          <input type="hidden" name="nrv_action" value="rebuild_config">
+          <input type="hidden" name="nrv_action" value="rebuild_config"><?= nrv_csrf_field() ?>
           <button class="btn small" type="submit" <?= $procCtlAvailable ? '' : 'disabled' ?>>Rebuild Config &amp; Restart</button>
         </form>
         <?php if (isset($_GET['rebuilt'])): ?><div class="alert good" style="margin-top:12px;">Xray config rebuilt from current users and restarted.</div><?php endif; ?>
@@ -1535,15 +1652,15 @@ $daemonPid = nrv_daemon_pid($cfg);
           </div>
         <?php endif; ?>
         <form method="post" style="display:inline">
-          <input type="hidden" name="nrv_action" value="daemon_start">
+          <input type="hidden" name="nrv_action" value="daemon_start"><?= nrv_csrf_field() ?>
           <button class="btn small" type="submit" <?= $procCtlAvailable ? '' : 'disabled' ?>>Start</button>
         </form>
         <form method="post" style="display:inline">
-          <input type="hidden" name="nrv_action" value="daemon_stop">
+          <input type="hidden" name="nrv_action" value="daemon_stop"><?= nrv_csrf_field() ?>
           <button class="btn small danger" type="submit" <?= $procCtlAvailable ? '' : 'disabled' ?>>Stop</button>
         </form>
         <form method="post" style="display:inline">
-          <input type="hidden" name="nrv_action" value="daemon_restart">
+          <input type="hidden" name="nrv_action" value="daemon_restart"><?= nrv_csrf_field() ?>
           <button class="btn small" type="submit" <?= $procCtlAvailable ? '' : 'disabled' ?>>Restart</button>
         </form>
       </div>
@@ -1566,7 +1683,7 @@ $daemonPid = nrv_daemon_pid($cfg);
             running from an earlier failed attempt:
           </p>
           <form method="post" style="display:inline">
-            <input type="hidden" name="nrv_action" value="force_cleanup">
+            <input type="hidden" name="nrv_action" value="force_cleanup"><?= nrv_csrf_field() ?>
             <button class="btn small danger" type="submit" <?= nrv_exec_available() ? '' : 'disabled' ?>>Force kill stray Xray/daemon processes</button>
           </form>
         <?php endif; ?>
@@ -1582,7 +1699,7 @@ $daemonPid = nrv_daemon_pid($cfg);
         </p>
         <?php if (isset($_GET['xmux_updated'])): ?><div class="alert good">Updated and applied to all users.</div><?php endif; ?>
         <form method="post">
-          <input type="hidden" name="nrv_action" value="update_xmux">
+          <input type="hidden" name="nrv_action" value="update_xmux"><?= nrv_csrf_field() ?>
           <label>Max concurrent connections per client (maxConcurrency)</label>
           <input type="text" name="max_concurrency" value="<?= (int)($cfg['xray']['xmux_max_concurrency'] ?? 2) ?>">
           <label>Max underlying connections (maxConnections)</label>
@@ -1613,7 +1730,7 @@ $daemonPid = nrv_daemon_pid($cfg);
         </table>
         <?php if (isset($_GET['tls_updated'])): ?><div class="alert good" style="margin-top:12px;">TLS setting updated for newly generated client configs.</div><?php endif; ?>
         <form method="post" style="margin-top:14px;">
-          <input type="hidden" name="nrv_action" value="update_tls">
+          <input type="hidden" name="nrv_action" value="update_tls"><?= nrv_csrf_field() ?>
           <label style="display:flex;align-items:center;gap:8px;">
             <input type="checkbox" name="public_tls" value="1" style="width:auto;" <?= !empty($cfg['xray']['public_tls']) ? 'checked' : '' ?>>
             Public endpoint uses HTTPS/TLS (client configs will use <code>security=tls</code>; uncheck for plain-HTTP testing)
@@ -1639,7 +1756,7 @@ $daemonPid = nrv_daemon_pid($cfg);
           destination (nothing this panel's code can fix), not the tunnel.
         </p>
         <form method="post">
-          <input type="hidden" name="nrv_action" value="run_network_diagnostics">
+          <input type="hidden" name="nrv_action" value="run_network_diagnostics"><?= nrv_csrf_field() ?>
           <button class="btn small" type="submit">Run diagnostic</button>
         </form>
         <?php if (!empty($_SESSION['nrv_network_diag'])): ?>
