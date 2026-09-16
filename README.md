@@ -85,6 +85,7 @@ As far as we could find, no other publicly known project combines all of this in
 1. Upload all files in this folder to your hosting account (e.g. `public_html/vpn/`)
 2. Visit `NoRoot-Panel.php` in a browser — the install wizard walks you through the rest
 3. On the Settings page after installing, copy the cron line shown under **Guaranteed Recovery via Cron** into your host's Cron Jobs panel
+### The installation wizard may take anywhere from 5 to 10 minutes; please do not close the page and wait until you are automatically redirected to the admin panel.
 
 ## Architecture (short version)
 
@@ -108,19 +109,7 @@ proxy.php  ──(long-poll)──▶  daemon.php  ──▶  Xray-core (127.0.0
 
 
 ## Security Update
-
-The latest security update introduces several hardening measures across the project:
-
-* **Enhanced CSRF protection** has been implemented across relevant state-changing requests.
-* **CAPTCHA protection** has been added to the login flow to reduce automated login and brute-force attempts.
-* **Input validation and sanitization** have been strengthened across configuration, web interfaces, and other externally controlled inputs, with particular attention to command-injection risks.
-* The project contains **no application logic that executes server commands directly from untrusted external input**.
-* The project does **not use MySQL or an SQL database**, so traditional direct SQL injection against a project database is not applicable.
-* **Digital signatures and integrity checks** are used to validate supported downloaded binaries and ZIP packages before use.
-* Compromising the **administrative panel does not by itself provide shell access or arbitrary server command execution** through the application.
-* The project's **`.htaccess` configuration has been hardened**, including restrictions for sensitive directories such as `bin` and protections against unintended directory listing and direct file access.
-* A dedicated [`SECURITY.md`](SECURITY.md) has been added with security reporting and disclosure guidelines.
-
+### You can see all Security Updates and Changes in [SECURITY_UPDATE.md](/SECURITY_UPDATE.md)
 These changes are part of the project's ongoing security hardening and do not constitute a guarantee that the software is completely vulnerability-free.
 
 
@@ -170,6 +159,8 @@ These changes are part of the project's ongoing security hardening and do not co
 ۲. آدرس `NoRoot-Panel.php` را در مرورگر باز کنید — ویزارد نصب بقیهٔ مراحل را طی می‌کند
 ۳. بعد از نصب، از صفحهٔ Settings، خط cron نمایش‌داده‌شده زیر عنوان **Guaranteed Recovery via Cron** را کپی کرده و در بخش Cron Jobs هاست خودتان اضافه کنید
 
+### هنگام نصب ویزارد مممکنه حتی 5 تا 10 دقیقه زمان ببره لطفا صفحه رو اصلا نبندید و انقدر صبر کنید تا خودکار وارد پنل ادمین بشید
+
 ### رفع اشکال روی هاست‌های بسیار محدود
 
 - **خطای «Address already in use» هنگام Start/Restart** — یک پروسهٔ باقی‌مانده از قبل، پورت را گرفته است. از دکمهٔ *Force kill stray processes* در صفحهٔ Settings استفاده کنید (بدون نیاز به SSH)
@@ -177,19 +168,7 @@ These changes are part of the project's ongoing security hardening and do not co
 - **یک صفحهٔ معمولی باز نمی‌شود / درخواست‌های زیادی fail می‌شوند** — این بزرگ‌ترین مشکلی بود که پیدا و رفع کردیم: هر درخواست هم‌زمان مرورگر به یک پروسهٔ کوتاه‌مدت PHP نیاز دارد. اگر همچنان زیر بار زیاد fail می‌شود، این سقف پروسهٔ اکانت شماست نه یک باگ — یک محدودیت فیزیکی سخت وجود دارد که PHP خام نمی‌تواند کاملاً دورش بزند
 
 ## به‌روزرسانی امنیتی
-
-در آخرین به‌روزرسانی، چندین لایه امنیتی و سخت‌سازی در بخش‌های مختلف پروژه اضافه و تقویت شده است:
-
-* **محافظت CSRF** در درخواست‌های حساس و تغییر‌دهنده وضعیت به‌صورت گسترده‌تر پیاده‌سازی شد.
-* برای کاهش تلاش‌های ورود خودکار و **Brute-Force**، **CAPTCHA** به فرایند ورود اضافه شد.
-* **اعتبارسنجی و ایمن‌سازی ورودی‌ها** در کانفیگ، رابط وب و سایر ورودی‌های تحت کنترل خارجی تقویت شد؛ به‌ویژه در بخش‌هایی که احتمال سوءاستفاده برای Command Injection وجود داشت.
-* در منطق برنامه، **اجرای مستقیم دستورات سرور بر اساس ورودی خارجیِ غیرقابل‌اعتماد وجود ندارد**.
-* پروژه از **MySQL یا دیتابیس SQL** استفاده نمی‌کند؛ بنابراین SQL Injection مستقیم علیه دیتابیس پروژه موضوعیت ندارد.
-* **امضای دیجیتال و بررسی یکپارچگی** برای باینری‌ها و فایل‌های ZIP دانلودیِ پشتیبانی‌شده انجام می‌شود تا فایل‌های نامعتبر یا دستکاری‌شده شناسایی شوند.
-* نفوذ به **پنل مدیریت، به‌تنهایی، امکان دسترسی Shell یا اجرای دلخواه Command روی سرور را از طریق برنامه فراهم نمی‌کند**.
-* فایل **`.htaccess`** بازنویسی و سخت‌سازی شد؛ از جمله محدودسازی دسترسی به پوشه‌های حساس مانند `bin` و جلوگیری از Directory Listing و دسترسی مستقیم ناخواسته به فایل‌ها.
-* فایل اختصاصی [`SECURITY.md`](SECURITY.md) برای سیاست امنیتی و گزارش آسیب‌پذیری به مخزن اضافه شد.
-
+### جزییات بروزرسانی های امنتی را در هر نسخه می توانید از [SECURITY_UPDATE.md](/SECURITY_UPDATE.md) مشاهده کنید
 این تغییرات بخشی از فرایند مستمر سخت‌سازی امنیتی پروژه هستند و به‌معنای تضمین نبود کامل آسیب‌پذیری در نرم‌افزار نیستند.
 
 
