@@ -315,7 +315,8 @@ if ($method === 'GET' && !$nrvpDaemonOk) {
     }
 }
 
-// ---- debug log ----
+// ---- debug log 
+// ----
 nrvp_write_log(
     $nrvpDaemonOk ? 'ok' : ('FAIL(' . ($ensureResp === null ? 'unreachable' : trim($ensureResp)) . ')'),
     $nrvpStatusCode ?? 'none',
