@@ -46,13 +46,29 @@ $localPort = (int)($cfg['xray']['local_port'] ?? 0);
 $daemonPort = (int)($cfg['xray']['daemon_port'] ?? 10001);
 if ($localPort <= 0) { http_response_code(502); exit; }
 
-// Reuse the panel's function library (process control, watchdog) without
-// executing its HTML router — cheap, rate-limited self-healing on every
-// real client relay hit, so a dead Xray/daemon process gets relaunched
-// even if no admin is watching the dashboard.
-define('NRV_INCLUDED_AS_LIB', true);
-require __DIR__ . '/NoRoot-Panel.php';
-nrv_ensure_services_running($cfg);
+// NOTE: a per-IP APCu-based rate limiter was tried here and removed — under
+// real concurrent load (many active sessions, each polling every few
+// seconds, exactly the pattern this whole relay is built to sustain) it
+// meant every single request contended on a shared APCu key, and lock
+// contention on that shared counter caused multi-second stalls under even
+// moderate load. Given how central this file is to every connection, the
+// existing NRVD_MAX_SESSIONS cap in daemon.php (500 sessions, checked
+// in-memory with zero cross-request locking) remains the DoS safety net —
+// it costs nothing per-request and doesn't share mutable state across
+// concurrent requests the way an APCu counter does.
+
+// NOTE: this file used to require the full ~90KB admin-panel library and
+// call its watchdog (nrv_ensure_services_running) on every single request,
+// purely for self-healing. That watchdog itself does a file read on every
+// call (even when its own cooldown suppresses the actual check), and
+// requiring the whole panel file adds parse/compile cost per request too.
+// On a real, heavily process-constrained host, dozens of concurrent
+// requests (one real page load) turned into dozens of concurrent large-file
+// parses + file reads — a meaningful, measured contributor to host-wide
+// slowdown, not just tunnel slowdown. Self-healing now relies entirely on
+// admin page loads and cron.php (see Settings — guaranteed within ~1 minute
+// independent of any web request), so this file stays fully self-contained
+// and does no work beyond relaying bytes.
 
 // ============================================================
 // Determine the path/query to forward (full REQUEST_URI, unchanged —
@@ -154,28 +170,33 @@ if ($method === 'GET' && !$nrvpDaemonOk) {
     // hit. Xray's client-side xmux pool is responsible for opening a
     // replacement GET when this one ends.
     //
-    // That cap is kept SHORT on purpose: every second this holds the response
-    // open is a second one PHP worker process (lsphp/PHP-FPM) is tied up, and
-    // a real page load needs many of these concurrently (one per resource,
-    // since no VLESS-level multiplexing is configured here) against a shared
-    // host's typically tiny concurrent-worker budget. A longer cap serves
-    // each individual request more efficiently but starves the OTHER
-    // concurrent requests a real page needs — confirmed in testing: 6
-    // concurrent requests against a 20s cap left most of them timing out
-    // waiting for a free worker. Keeping this short lets far more of a
-    // page's concurrent requests actually get served.
-    //
-    // Each call to the daemon below is itself a LONG-POLL (daemon.php holds
-    // the connection open until it has real data or its own bounded max wait
-    // elapses, currently 4s) — NOT a fixed-interval poll, so shortening this
-    // doesn't reintroduce busy-polling, it just bounds how long any single
-    // request can hold a worker before giving another request a turn.
-    $maxDurationSec = 6;
-    $daemonCallTimeoutSec = 6; // safely above daemon.php's own 4s long-poll max wait
-    $deadline = microtime(true) + $maxDurationSec;
+    // Two DIFFERENT timeouts, on purpose — a single fixed cap punishes both
+    // ends of a real trade-off:
+    //   - Many concurrent, mostly-IDLE sessions (a page load, or a TUN-mode
+    //     client tunneling a whole OS's traffic — DNS, heartbeats, background
+    //     apps) need workers released FAST so the tiny shared worker budget
+    //     can rotate across all of them. Confirmed on a real constrained
+    //     host: a flat 6s cap was enough that two ordinary page loads
+    //     saturated the account's ENTIRE process budget and stalled
+    //     unrelated sites on the same account.
+    //   - One session ACTIVELY streaming real bytes (a download) is doing
+    //     useful work with its worker, not wasting it — cutting it off on
+    //     the same short fixed cap just forces constant reconnects
+    //     (fresh PHP process + ENSURE round trip each time) mid-transfer,
+    //     which is wasted overhead AND can look like a stall/failure under
+    //     heavy download load.
+    // So: release fast when idle (protects the shared worker budget), but
+    // let genuinely active transfers keep going much longer (protects
+    // download throughput/stability) — governed by two separate clocks.
+    $idleTimeoutSec = 1.5;   // no NEW data this long -> release the worker
+    $absoluteMaxSec = 25;    // hard backstop regardless of activity
+    $daemonCallTimeoutSec = 2; // safely above daemon.php's own 1s long-poll max wait
+    $deadline = microtime(true) + $absoluteMaxSec;
+    $lastActivity = microtime(true);
     $headerSent = false;
     while (microtime(true) < $deadline) {
         if (connection_aborted()) break;
+        if (microtime(true) - $lastActivity > $idleTimeoutSec) break;
         $resp = nrvp_daemon_call($daemonPort, "GET $sessionId\n", $daemonCallTimeoutSec);
         if ($resp === null) {
             if ($nrvpStatusCode === null) { http_response_code(502); $nrvpStatusCode = 502; }
@@ -197,6 +218,7 @@ if ($method === 'GET' && !$nrvpDaemonOk) {
             echo $payload;
             @flush();
             $nrvpBytesOut += $len;
+            $lastActivity = microtime(true); // real data flowed — this worker is earning its keep, keep going
         }
         if ($status === 'DEAD') break;
         // No usleep here — the daemon call above already waited (via its own
