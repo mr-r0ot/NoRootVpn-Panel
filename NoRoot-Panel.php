@@ -5,6 +5,13 @@
  * built on Xray-core (VLESS + XHTTP) relayed through proxy.php.
  */
 
+// Bump this to match the tag when cutting a new release on
+// https://github.com/mr-r0ot/NoRootVpn-Panel — the panel checks this against
+// the repo's latest GitHub release (cached, best-effort, never blocking) and
+// shows a dismissible notice if an update exists. Never auto-updates.
+define('NRV_VERSION', '2.5.0');
+define('NRV_UPDATE_REPO', 'mr-r0ot/NoRootVpn-Panel');
+
 // When required by proxy.php purely for its function library (process control,
 // watchdog), skip session/error-display setup entirely — a session file per
 // relay request would be pure waste, and proxy.php manages its own error/output
@@ -27,6 +34,58 @@ function nrv_csrf_field() {
 }
 function nrv_csrf_valid() {
     return isset($_SESSION['nrv_csrf'], $_POST['csrf_token']) && hash_equals($_SESSION['nrv_csrf'], $_POST['csrf_token']);
+}
+
+// Self-hosted image CAPTCHA — no external service/API dependency (works on
+// heavily-censored networks where a third-party CAPTCHA might not load,
+// same reasoning as the login page overall). Only touches the login page;
+// nothing here is on any tunnel/relay code path.
+function nrv_captcha_available() {
+    return function_exists('imagecreatetruecolor') && function_exists('imagepng');
+}
+
+function nrv_captcha_generate_code() {
+    // Excludes visually-ambiguous characters (0/O, 1/I/l).
+    $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    $code = '';
+    for ($i = 0; $i < 5; $i++) {
+        $code .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+    }
+    return $code;
+}
+
+// Renders $code as a distorted, noisy PNG and returns it as a data: URI —
+// deliberately no external font file dependency (uses GD's built-in bitmap
+// fonts), so it's a single self-contained function with no extra assets.
+function nrv_captcha_image_data_uri($code) {
+    $width = 160; $height = 52;
+    $img = imagecreatetruecolor($width, $height);
+    $bg = imagecolorallocate($img, 15, 18, 32);
+    imagefill($img, 0, 0, $bg);
+
+    for ($i = 0; $i < 8; $i++) {
+        $lineColor = imagecolorallocate($img, random_int(40, 90), random_int(40, 90), random_int(70, 130));
+        imageline($img, random_int(0, $width), random_int(0, $height), random_int(0, $width), random_int(0, $height), $lineColor);
+    }
+    for ($i = 0; $i < 140; $i++) {
+        $dotColor = imagecolorallocate($img, random_int(30, 70), random_int(30, 70), random_int(55, 110));
+        imagesetpixel($img, random_int(0, $width - 1), random_int(0, $height - 1), $dotColor);
+    }
+
+    $len = strlen($code);
+    $spacing = intdiv($width, $len + 1);
+    for ($i = 0; $i < $len; $i++) {
+        $charColor = imagecolorallocate($img, random_int(150, 230), random_int(150, 230), random_int(210, 255));
+        $x = $spacing * ($i + 1) - 7 + random_int(-4, 4);
+        $y = intdiv($height, 2) - 8 + random_int(-8, 8);
+        imagestring($img, 5, $x, $y, $code[$i], $charColor);
+    }
+
+    ob_start();
+    imagepng($img);
+    $png = ob_get_clean();
+    imagedestroy($img);
+    return 'data:image/png;base64,' . base64_encode($png);
 }
 
 // ============================================================
@@ -57,6 +116,19 @@ function nrv_load_config() {
 function nrv_save_config($data) {
     file_put_contents(NRV_CONFIG_FILE, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
     nrv_write_protective_htaccess();
+    nrv_write_protective_web_config();
+}
+
+// cron.php is necessarily public (a cron job has no session/cookie), so it's
+// gated by a random per-install secret instead — generated once at install
+// and lazily backfilled here for installs that predate this. Doesn't touch
+// anything relay/connection-related.
+function nrv_ensure_cron_token(&$cfg) {
+    if (empty($cfg['cron_token'])) {
+        $cfg['cron_token'] = bin2hex(random_bytes(16));
+        nrv_save_config($cfg);
+    }
+    return $cfg['cron_token'];
 }
 
 function nrv_write_protective_htaccess() {
@@ -87,6 +159,38 @@ function nrv_write_bin_htaccess($binDir) {
     @file_put_contents($path, $content);
 }
 
+// .htaccess only works on Apache — best-effort equivalent for IIS (which
+// many fewer shared hosts run, but it exists), since IIS reads web.config
+// the same way Apache reads .htaccess. Nginx has no such per-directory file
+// mechanism at all — that case is handled by displaying a suggested server
+// block on the Settings page instead (see nrv_nginx_snippet below), since
+// there's no file PHP could write that Nginx would ever read.
+function nrv_write_protective_web_config() {
+    $path = NRV_DIR . '/web.config';
+    if (file_exists($path)) return; // don't clobber an admin's own IIS config
+    $xml = '<?xml version="1.0" encoding="UTF-8"?>' . "\n"
+        . "<configuration>\n  <system.webServer>\n    <directoryBrowse enabled=\"false\" />\n    <security>\n      <requestFiltering>\n        <hiddenSegments>\n          <add segment=\"bin\" />\n        </hiddenSegments>\n        <fileExtensions allowUnlisted=\"true\">\n          <add fileExtension=\".json\" allowed=\"false\" />\n          <add fileExtension=\".log\" allowed=\"false\" />\n          <add fileExtension=\".pid\" allowed=\"false\" />\n        </fileExtensions>\n        <denyUrlSequences>\n          <add sequence=\"daemon.php\" />\n        </denyUrlSequences>\n      </requestFiltering>\n    </security>\n  </system.webServer>\n</configuration>\n";
+    @file_put_contents($path, $xml);
+}
+
+// No separate bin/web.config needed — the root web.config's hiddenSegments
+// rule for "bin" already blocks every request whose path contains that
+// segment, site-wide, which covers the Xray binary/logs/pid/geo-data files
+// more thoroughly than a per-extension rule could.
+
+// Nginx reads no per-directory file at all, so the only thing this app can
+// do is hand the admin a ready-to-paste server block for their own vhost —
+// purely informational, never executed by this app.
+function nrv_nginx_snippet($cfg) {
+    $publicPath = rtrim($cfg['xray']['proxy_public_path'] ?? '/proxy.php', '/');
+    $base = dirname($publicPath); // e.g. "/vpn" from "/vpn/proxy.php"
+    $base = $base === '.' || $base === '/' ? '' : $base;
+    return "location ~ ^{$base}/(NoRoot-Config\\.json|.*\\.log|.*\\.pid)\$ { deny all; return 404; }\n"
+        . "location ^~ {$base}/bin/ { deny all; return 404; }\n"
+        . "location = {$base}/daemon.php { deny all; return 404; }\n"
+        . "autoindex off;";
+}
+
 // ============================================================
 // Helpers: system
 // ============================================================
@@ -111,6 +215,46 @@ function nrv_uuid() {
     $data[6] = chr(ord($data[6]) & 0x0f | 0x40);
     $data[8] = chr(ord($data[8]) & 0x3f | 0x80);
     return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
+}
+
+// Best-effort, cached (24h), never-blocking check against the project's
+// GitHub releases — a short timeout and a hard fail-silent policy mean a
+// slow/unreachable/censored network never delays a page load, it just skips
+// showing the update notice. Purely informational; nothing here touches
+// tunnel/relay logic or ever updates anything automatically.
+function nrv_check_for_update() {
+    $cacheFile = NRV_DIR . '/.nrv_update_check.json';
+    $now = time();
+    $cache = file_exists($cacheFile) ? json_decode((string)@file_get_contents($cacheFile), true) : null;
+    if (is_array($cache) && isset($cache['checked_at']) && ($now - $cache['checked_at']) < 86400) {
+        return $cache['latest'] ?? null;
+    }
+    $latest = null;
+    if (function_exists('curl_init')) {
+        $ch = curl_init('https://api.github.com/repos/' . NRV_UPDATE_REPO . '/releases/latest');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 3,
+            CURLOPT_CONNECTTIMEOUT => 2,
+            CURLOPT_HTTPHEADER => ['User-Agent: NoRootVpnPanel-UpdateCheck'],
+            CURLOPT_FOLLOWLOCATION => true,
+        ]);
+        $resp = @curl_exec($ch);
+        if ($resp !== false && curl_getinfo($ch, CURLINFO_HTTP_CODE) == 200) {
+            $data = json_decode($resp, true);
+            if (!empty($data['tag_name']) && is_string($data['tag_name'])) {
+                $latest = ltrim($data['tag_name'], 'vV');
+            }
+        }
+        curl_close($ch);
+    }
+    @file_put_contents($cacheFile, json_encode(['checked_at' => $now, 'latest' => $latest]));
+    return $latest;
+}
+
+function nrv_update_available() {
+    $latest = nrv_check_for_update();
+    return ($latest && version_compare($latest, NRV_VERSION, '>')) ? $latest : null;
 }
 
 function nrv_cpu_percent() {
@@ -891,10 +1035,77 @@ function nrv_watchdog_reset($cfg) {
 // Runs on every admin login: full env re-check, service liveness/relaunch,
 // and re-download of the Xray binary if it's gone missing. Result is meant
 // to be shown once as a dashboard banner and then discarded.
+// Probes the REAL public endpoint (not a guess from the install request's
+// own scheme) to figure out whether plain HTTP works directly or gets
+// force-redirected to HTTPS by the host — this is what previously required
+// an admin to notice a redirect-loop in a client's log and flip the TLS
+// toggle by hand. Only ever called from the login healthcheck (once per
+// login, itself cached for hours) — NEVER from proxy.php/daemon.php's
+// connection path, so it can never add per-request latency.
+function nrv_detect_public_tls($cfg) {
+    if (!function_exists('curl_init')) return null;
+    $host = (string)($cfg['xray']['public_host'] ?? '');
+    $host = preg_replace('/:\d+$/', '', $host);
+    if ($host === '') return null;
+
+    $ch = curl_init('http://' . $host . '/');
+    curl_setopt_array($ch, [
+        CURLOPT_NOBODY => true, CURLOPT_HEADER => true, CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => false, CURLOPT_TIMEOUT => 4, CURLOPT_CONNECTTIMEOUT => 3,
+    ]);
+    $resp = @curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($resp !== false && $httpCode > 0) {
+        if ($httpCode >= 300 && $httpCode < 400 && preg_match('/^Location:\s*https:/im', $resp)) {
+            return true; // plain HTTP is being redirected to HTTPS
+        }
+        return false; // plain HTTP answered directly — no TLS needed at transport level
+    }
+
+    // Plain HTTP didn't answer at all — see if HTTPS does (host may only speak TLS).
+    $ch2 = curl_init('https://' . $host . '/');
+    curl_setopt_array($ch2, [
+        CURLOPT_NOBODY => true, CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 4, CURLOPT_CONNECTTIMEOUT => 3,
+    ]);
+    $resp2 = @curl_exec($ch2);
+    $httpCode2 = curl_getinfo($ch2, CURLINFO_HTTP_CODE);
+    curl_close($ch2);
+    return ($resp2 !== false && $httpCode2 > 0) ? true : null;
+}
+
+// Cached (6h) wrapper — auto-corrects and persists cfg['xray']['public_tls']
+// if reality no longer matches it, returning the new value if it changed
+// (so the caller can tell the admin), or null if nothing changed/checked.
+function nrv_maybe_autocorrect_tls(&$cfg) {
+    $cacheFile = NRV_DIR . '/.nrv_tls_check.json';
+    $now = time();
+    $cache = file_exists($cacheFile) ? json_decode((string)@file_get_contents($cacheFile), true) : null;
+    if (is_array($cache) && isset($cache['checked_at']) && ($now - $cache['checked_at']) < 21600) {
+        return null;
+    }
+    @file_put_contents($cacheFile, json_encode(['checked_at' => $now]));
+    $detected = nrv_detect_public_tls($cfg);
+    if ($detected === null) return null;
+    if ($detected !== !empty($cfg['xray']['public_tls'])) {
+        $cfg['xray']['public_tls'] = $detected;
+        nrv_save_config($cfg);
+        return $detected;
+    }
+    return null;
+}
+
 function nrv_run_login_healthcheck($cfg) {
     $repairs = [];
     $tests = nrv_run_env_tests();
     nrv_ensure_services_running($cfg);
+    $tlsChange = nrv_maybe_autocorrect_tls($cfg);
+    if ($tlsChange !== null) {
+        $repairs[] = 'Auto-detected that the public endpoint ' . ($tlsChange ? 'now requires' : 'no longer requires')
+            . ' TLS — updated automatically. Existing client configs must be regenerated (Users -> Configs) to pick this up.';
+    }
     if (!is_executable($cfg['paths']['xray_bin'])) {
         $dl = nrv_download_xray($cfg['paths']['base_dir']);
         if ($dl['ok']) {
@@ -977,7 +1188,10 @@ $cfg = nrv_load_config();
 $installed = $cfg !== null && !empty($cfg['installed']);
 
 // ---------- Logout ----------
-if (isset($_GET['action']) && $_GET['action'] === 'logout') {
+// POST + CSRF, not GET — a state-changing action (ending the admin's
+// session) shouldn't be triggerable by a third-party page linking/embedding
+// a GET request. Doesn't touch anything relay/connection-related.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['nrv_action'] ?? '') === 'logout' && nrv_csrf_valid()) {
     session_destroy();
     header('Location: ' . basename(__FILE__));
     exit;
@@ -1037,6 +1251,7 @@ if (!$installed) {
                 'installed' => false,
                 'admin_username' => $adminUser,
                 'admin_password_hash' => password_hash($adminPass, PASSWORD_DEFAULT),
+                'cron_token' => bin2hex(random_bytes(16)),
                 'paths' => [
                     'base_dir' => $baseDir,
                     'xray_bin' => $baseDir . '/xray' . (NRV_IS_WINDOWS ? '.exe' : ''),
@@ -1184,14 +1399,18 @@ if (empty($_SESSION['nrv_logged_in'])) {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $u = $_POST['username'] ?? '';
         $p = $_POST['password'] ?? '';
-        $captchaOk = isset($_SESSION['nrv_captcha_answer'], $_POST['captcha'])
-            && (int)$_POST['captcha'] === (int)$_SESSION['nrv_captcha_answer'];
+        if (isset($_SESSION['nrv_captcha_code'])) {
+            $captchaOk = isset($_POST['captcha']) && hash_equals($_SESSION['nrv_captcha_code'], strtoupper(trim((string)$_POST['captcha'])));
+        } else {
+            $captchaOk = isset($_SESSION['nrv_captcha_answer'], $_POST['captcha'])
+                && (int)$_POST['captcha'] === (int)$_SESSION['nrv_captcha_answer'];
+        }
         if (!nrv_csrf_valid()) {
             $loginError = 'Your session expired — please try again.';
         } elseif (!$captchaOk) {
-            $loginError = 'Incorrect answer to the verification question.';
+            $loginError = 'Incorrect verification code.';
         } elseif ($u === $cfg['admin_username'] && password_verify($p, $cfg['admin_password_hash'])) {
-            unset($_SESSION['nrv_captcha_answer']);
+            unset($_SESSION['nrv_captcha_answer'], $_SESSION['nrv_captcha_code']);
             $_SESSION['nrv_logged_in'] = true;
             $_SESSION['nrv_last_healthcheck'] = nrv_run_login_healthcheck($cfg);
             header('Location: ' . basename(__FILE__));
@@ -1200,13 +1419,23 @@ if (empty($_SESSION['nrv_logged_in'])) {
             $loginError = 'Invalid username or password.';
         }
     }
-    // A fresh question every render (including after a failed attempt) so a
-    // captured/replayed answer can't be reused — a lightweight, self-hosted
-    // bot deterrent with no external service dependency (works even on
-    // heavily-censored networks where a third-party CAPTCHA might not load).
-    $captchaA = random_int(1, 9);
-    $captchaB = random_int(1, 9);
-    $_SESSION['nrv_captcha_answer'] = $captchaA + $captchaB;
+    // A fresh challenge every render (including after a failed attempt) so a
+    // captured/replayed answer can't be reused — a self-hosted image CAPTCHA
+    // (no external service dependency, works even on heavily-censored
+    // networks where a third-party CAPTCHA might not load), falling back to
+    // a simple arithmetic question only if this host's PHP has no GD.
+    $useImageCaptcha = nrv_captcha_available();
+    if ($useImageCaptcha) {
+        $captchaCode = nrv_captcha_generate_code();
+        $_SESSION['nrv_captcha_code'] = $captchaCode;
+        unset($_SESSION['nrv_captcha_answer']);
+        $captchaImageUri = nrv_captcha_image_data_uri($captchaCode);
+    } else {
+        $captchaA = random_int(1, 9);
+        $captchaB = random_int(1, 9);
+        $_SESSION['nrv_captcha_answer'] = $captchaA + $captchaB;
+        unset($_SESSION['nrv_captcha_code']);
+    }
     ?>
     <!DOCTYPE html>
     <html lang="en">
@@ -1228,8 +1457,14 @@ if (empty($_SESSION['nrv_logged_in'])) {
           <input type="text" name="username" required autocomplete="username">
           <label>Password</label>
           <input type="password" name="password" required autocomplete="current-password">
-          <label><?= $captchaA ?> + <?= $captchaB ?> = ?</label>
-          <input type="text" name="captcha" inputmode="numeric" autocomplete="off" required>
+          <?php if ($useImageCaptcha): ?>
+            <label>Enter the code shown below</label>
+            <img src="<?= $captchaImageUri ?>" alt="Verification code" width="160" height="52" style="display:block;border-radius:8px;margin-bottom:8px;">
+            <input type="text" name="captcha" autocomplete="off" maxlength="8" style="text-transform:uppercase;" required>
+          <?php else: ?>
+            <label><?= $captchaA ?> + <?= $captchaB ?> = ?</label>
+            <input type="text" name="captcha" inputmode="numeric" autocomplete="off" required>
+          <?php endif; ?>
           <button class="btn" type="submit">Sign in</button>
         </form>
       </div>
@@ -1393,6 +1628,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['nrv_action'])) {
 $page = $_GET['page'] ?? 'dashboard';
 $xrayPid = nrv_xray_pid($cfg);
 $daemonPid = nrv_daemon_pid($cfg);
+$nrvNewVersion = nrv_update_available();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1404,22 +1640,28 @@ $daemonPid = nrv_daemon_pid($cfg);
 </head>
 <body>
 <div class="mobile-topbar">
-  <div class="brand">NoRoot VPN</div>
+  <div class="brand">NoRoot VPN <span class="version-tag">v<?= NRV_VERSION ?></span><?php if ($nrvNewVersion): ?> <a class="update-badge" href="https://github.com/<?= NRV_UPDATE_REPO ?>/releases" target="_blank" rel="noopener">Update</a><?php endif; ?></div>
   <nav>
     <a href="?page=dashboard" class="<?= $page === 'dashboard' ? 'active' : '' ?>">Dashboard</a>
     <a href="?page=users" class="<?= $page === 'users' ? 'active' : '' ?>">Users</a>
     <a href="?page=settings" class="<?= $page === 'settings' ? 'active' : '' ?>">Settings</a>
-    <a href="?action=logout" class="logout">Exit</a>
+    <form method="post" class="logout-form"><?= nrv_csrf_field() ?><input type="hidden" name="nrv_action" value="logout"><button type="submit" class="logout">Exit</button></form>
   </nav>
 </div>
 <div class="app">
   <aside class="sidebar">
     <div class="brand">NoRoot VPN</div>
+    <div class="version-row">
+      <span class="version-tag">v<?= NRV_VERSION ?></span>
+      <?php if ($nrvNewVersion): ?>
+        <a class="update-badge" href="https://github.com/<?= NRV_UPDATE_REPO ?>/releases" target="_blank" rel="noopener" title="Update available — not required">v<?= htmlspecialchars($nrvNewVersion) ?> available</a>
+      <?php endif; ?>
+    </div>
     <nav>
       <a href="?page=dashboard" class="<?= $page === 'dashboard' ? 'active' : '' ?>"><span class="icon">&#9679;</span> Dashboard</a>
       <a href="?page=users" class="<?= $page === 'users' ? 'active' : '' ?>"><span class="icon">&#9675;</span> Users</a>
       <a href="?page=settings" class="<?= $page === 'settings' ? 'active' : '' ?>"><span class="icon">&#9881;</span> Settings</a>
-      <a href="?action=logout" class="logout"><span class="icon">&#10005;</span> Logout</a>
+      <form method="post" class="logout-form"><?= nrv_csrf_field() ?><input type="hidden" name="nrv_action" value="logout"><button type="submit" class="logout"><span class="icon">&#10005;</span> Logout</button></form>
     </nav>
   </aside>
 
@@ -1675,7 +1917,7 @@ $daemonPid = nrv_daemon_pid($cfg);
           minute) even on hosts where the buttons above can't. Add this exact line in your host's Cron
           Jobs page (cPanel: Advanced &rarr; Cron Jobs), set to run every minute:
         </p>
-        <pre class="log-box"><?= htmlspecialchars('* * * * * ' . nrv_find_php_binary() . ' ' . NRV_DIR . '/cron.php' . (NRV_IS_WINDOWS ? ' >NUL 2>&1' : ' >/dev/null 2>&1')) ?></pre>
+        <pre class="log-box"><?= htmlspecialchars('* * * * * ' . nrv_find_php_binary() . ' ' . NRV_DIR . '/cron.php ' . nrv_ensure_cron_token($cfg) . (NRV_IS_WINDOWS ? ' >NUL 2>&1' : ' >/dev/null 2>&1')) ?></pre>
         <?php if (!NRV_IS_WINDOWS): ?>
           <p class="muted" style="margin-top:14px;margin-bottom:10px;">
             If Start ever fails with "Address already in use" and you have no SSH access to kill the
@@ -1687,6 +1929,17 @@ $daemonPid = nrv_daemon_pid($cfg);
             <button class="btn small danger" type="submit" <?= nrv_exec_available() ? '' : 'disabled' ?>>Force kill stray Xray/daemon processes</button>
           </form>
         <?php endif; ?>
+      </div>
+
+      <div class="panel-box">
+        <h2>Extra Protection on Nginx</h2>
+        <p class="muted" style="margin-bottom:12px;">
+          The <code>.htaccess</code>/<code>web.config</code> rules this panel writes automatically only work on
+          Apache/IIS — Nginx has no per-directory config file at all, so if this site runs on Nginx, add this to
+          its server block yourself to keep the config file, logs, and Xray binary from being reachable directly
+          (this is purely informational — nothing here is applied automatically):
+        </p>
+        <pre class="log-box"><?= htmlspecialchars(nrv_nginx_snippet($cfg)) ?></pre>
       </div>
 
       <div class="panel-box">
