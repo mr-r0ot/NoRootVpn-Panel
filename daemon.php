@@ -66,19 +66,18 @@ define('NRVD_HEADER_STALL_TIMEOUT_SEC', 25);
 define('NRVD_IDLE_GC_SEC', 90);
 define('NRVD_FAILED_IDLE_GC_SEC', 15);
 // Every proxy.php GET request holding this long-poll open ties up one full
-// PHP worker process (lsphp/PHP-FPM) on the web server for the ENTIRE wait.
-// A real page load needs many concurrent resource requests, each its own
-// VLESS/xhttp session — and shared hosting typically caps concurrent PHP
-// workers for an account very low. A long wait here (previously 8s, and
-// proxy.php's own cap let it run up to 20-28s in testing) means only a
-// handful of a page's ~10-50 concurrent requests can be served before the
-// account's worker budget is exhausted and the rest fail outright — this is
-// the actual cause of "a normal page won't load." Keeping this short lets
-// far more concurrent sessions fit inside the same tiny worker budget, at
-// the cost of the client reconnecting its GET more often (cheap: it's a
-// bounded wait, not a busy loop, and each reconnect returns instantly once
-// real data exists).
-define('NRVD_PENDING_GET_MAX_WAIT_SEC', 4);
+// PHP worker process (lsphp/PHP-FPM) on the web server for the ENTIRE wait —
+// and by Little's Law, concurrent workers needed ≈ arrival rate × hold time,
+// so this single number is the dominant lever over how many concurrent
+// browser resource-loads this host can sustain before the account's ENTIRE
+// process/thread budget (shared with every other site on the account, not
+// just this one) is exhausted. Confirmed on a real, heavily constrained
+// host: even 4s was enough that opening two ordinary web pages saturated
+// the account's whole process budget, making unrelated sites on the same
+// account stall too — not just the tunnel. Kept aggressively short; the
+// cost is more frequent client reconnects, which are cheap local round
+// trips, not a busy loop (this is still a real bounded wait, not polling).
+define('NRVD_PENDING_GET_MAX_WAIT_SEC', 1);
 // Hard cap on how much unread data a single session may buffer in memory.
 // Without this, a session whose client-side GET can't keep up (e.g. a large
 // download stuck behind worker exhaustion) would let nrvd_process_bytes grow
