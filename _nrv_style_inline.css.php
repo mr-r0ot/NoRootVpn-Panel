@@ -121,10 +121,18 @@ hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
   padding: 22px 0; flex-shrink: 0; display: flex; flex-direction: column;
 }
 .sidebar .brand {
-  font-weight: 700; font-size: 17px; padding: 0 22px 22px; letter-spacing: 0.2px;
+  font-weight: 700; font-size: 17px; padding: 0 22px 12px; letter-spacing: 0.2px;
   background: var(--accent-grad); -webkit-background-clip: text; background-clip: text; color: transparent;
   display: flex; align-items: center; gap: 8px;
 }
+.sidebar .version-row { padding: 0 22px 22px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.version-tag { font-size: 11px; color: var(--text-faint); font-weight: 500; }
+.update-badge {
+  font-size: 10.5px; font-weight: 700; color: #fff; background: linear-gradient(120deg, #ef4444, #f87171);
+  padding: 3px 9px; border-radius: 20px; letter-spacing: 0.2px; box-shadow: 0 2px 10px -2px rgba(239, 68, 68, 0.55);
+  transition: opacity 0.12s;
+}
+.update-badge:hover { opacity: 0.88; }
 .sidebar nav { display: flex; flex-direction: column; gap: 2px; }
 .sidebar nav a {
   display: flex; align-items: center; gap: 10px; padding: 11px 22px; font-size: 13.5px;
@@ -135,6 +143,15 @@ hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
 .sidebar nav a.active { color: var(--text); border-right-color: var(--accent-1); background: var(--surface-2); }
 .sidebar nav a.logout { margin-top: auto; color: var(--bad); }
 .sidebar .icon { width: 16px; text-align: center; opacity: 0.85; font-size: 13px; }
+.sidebar nav form.logout-form { margin-top: auto; }
+.sidebar nav form.logout-form button.logout,
+.mobile-topbar nav form.logout-form button.logout {
+  background: none; border: none; cursor: pointer; font: inherit; text-align: inherit;
+  width: 100%; padding: 11px 22px; display: flex; align-items: center; gap: 10px;
+  color: var(--bad);
+}
+.mobile-topbar nav form.logout-form { display: inline; }
+.mobile-topbar nav form.logout-form button.logout { width: auto; padding: 0; }
 
 .content { flex: 1; padding: 30px 34px; max-width: 960px; width: 100%; margin: 0 auto; }
 .content h1 { font-size: 23px; margin: 0 0 22px; font-weight: 700; letter-spacing: -0.2px; }
