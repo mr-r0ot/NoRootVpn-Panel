@@ -86,7 +86,7 @@ As far as we could find, no other publicly known project combines all of this in
 1. Upload all files in this folder to your hosting account (e.g. `public_html/vpn/`)
 2. Visit `NoRoot-Panel.php` in a browser — the install wizard walks you through the rest
 3. On the Settings page after installing, copy the cron line shown under **Guaranteed Recovery via Cron** into your host's Cron Jobs panel
-### The installation wizard may take anywhere from 5 to 10 minutes; please do not close the page and wait until you are automatically redirected to the admin panel.
+### The installation wizard may take anywhere to 5 minutes; please do not close the page and wait until you are automatically redirected to the admin panel.
 
 ## Architecture (short version)
 
@@ -160,7 +160,7 @@ These changes are part of the project's ongoing security hardening and do not co
 ۲. آدرس `NoRoot-Panel.php` را در مرورگر باز کنید — ویزارد نصب بقیهٔ مراحل را طی می‌کند
 ۳. بعد از نصب، از صفحهٔ Settings، خط cron نمایش‌داده‌شده زیر عنوان **Guaranteed Recovery via Cron** را کپی کرده و در بخش Cron Jobs هاست خودتان اضافه کنید
 
-### هنگام نصب ویزارد مممکنه حتی 5 تا 10 دقیقه زمان ببره لطفا صفحه رو اصلا نبندید و انقدر صبر کنید تا خودکار وارد پنل ادمین بشید
+### هنگام نصب ویزارد مممکنه تا 5 دقیقه زمان ببره لطفا صفحه رو نبندید و صبر کنید تا خودکار وارد پنل ادمین بشید
 
 ### رفع اشکال روی هاست‌های بسیار محدود
 
